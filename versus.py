@@ -31,11 +31,11 @@ from rich.text import Text
 
 # --- Constants ---------------------------------------------------------------
 
-VERSION = "1.1"
+VERSION = "1.2"
 BASE_URL = "https://openrouter.ai/api/v1"
 
-DEFAULT_MODEL_A = "google/gemma-4-31b-it:free"
-DEFAULT_MODEL_B = "openai/gpt-oss-120b:free"
+DEFAULT_MODEL_A = "openai/gpt-oss-120b:free"
+DEFAULT_MODEL_B = "google/gemma-4-31b-it:free"
 
 ORANGE = "#FF6B35"  # Agent A / banner
 BLUE = "#4FC3F7"    # Agent B
@@ -64,7 +64,8 @@ SYSTEM_B = (
     "Max 200 words."
 )
 SYSTEM_JUDGE = (
-    "You are the Judge. Detect the language of the question and respond in that language.\n"
+    "You are the Judge. Detect the language of the original question and respond only in that language.\n"
+    "If the original question is in Russian, your entire final verdict must be in Russian.\n"
     "Read the full debate. Deliver ONE clear verdict — no fence-sitting, no 'it depends'.\n"
     "Be blunt and decisive. No corporate tone, no AI-slop.\n"
     "Then add a single line starting with 'BUT:' for the edge case where the losing side makes sense.\n"
@@ -75,10 +76,10 @@ SYSTEM_JUDGE = (
 )
 
 MISSING_KEY_MSG = (
-    "OPENROUTER_API_KEY is not set.\n\n"
-    "Run:\n"
+    "API-ключ OpenRouter не настроен.\n\n"
+    "Запусти:\n"
     "  versus setup\n\n"
-    "Get a key at:\n"
+    "Ключ можно получить здесь:\n"
     "  https://openrouter.ai/keys"
 )
 
@@ -105,12 +106,19 @@ def get_config_env_path() -> Path:
     return config_dir / "versus-llm" / ".env"
 
 
+def mask_api_key(api_key: str) -> str:
+    """Return a safe preview that proves input was captured without leaking it."""
+    if len(api_key) <= 8:
+        return "*" * len(api_key)
+    return f"{api_key[:4]}...{api_key[-4:]}"
+
+
 def setup_api_key() -> None:
     """Prompt once for the OpenRouter API key and save it to user config."""
     console = Console()
-    api_key = getpass("OpenRouter API key: ").strip()
+    api_key = getpass("Вставь API-ключ OpenRouter: ").strip()
     if not api_key:
-        error_exit(console, "OpenRouter API key cannot be empty.")
+        error_exit(console, "API-ключ не может быть пустым.")
 
     path = get_config_env_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +128,7 @@ def setup_api_key() -> None:
             path.chmod(0o600)
         except OSError:
             pass
-    console.print(f"[green]Saved OpenRouter API key to {path}[/]")
+    console.print(f"[green]API-ключ OpenRouter сохранен ({mask_api_key(api_key)}): {path}[/]")
 
 
 def load_api_key_env() -> None:
@@ -132,7 +140,7 @@ def load_api_key_env() -> None:
 def build_initial_context(question: str, filename: str | None, content: str | None) -> str:
     """Prepend file context to the question when a context file is supplied."""
     if filename and content is not None:
-        return f"Context file ({filename}):\n{content}\n\nQuestion: {question}"
+        return f"Файл с контекстом ({filename}):\n{content}\n\nВопрос: {question}"
     return question
 
 
@@ -142,7 +150,7 @@ def format_transcript(entries: list[dict]) -> str:
         return "(no arguments yet)"
     lines = []
     for entry in entries:
-        lines.append(f"{entry['speaker']} (Round {entry['round']}):\n{entry['text']}")
+        lines.append(f"{entry['speaker']} (раунд {entry['round']}):\n{entry['text']}")
     return "\n\n".join(lines)
 
 
@@ -152,15 +160,15 @@ def agent_user_content(topic: str, entries: list[dict]) -> str:
     The persona and per-turn instructions live entirely in the system prompt;
     this message only carries the shared state of the debate.
     """
-    return f"Debate topic:\n{topic}\n\nTranscript so far:\n{format_transcript(entries)}"
+    return f"Вопрос для спора:\n{topic}\n\nТранскрипт на текущий момент:\n{format_transcript(entries)}"
 
 
 def judge_user_content(topic: str, entries: list[dict]) -> str:
     """Build the user message for the Judge's final verdict."""
     return (
-        f"Debate topic:\n{topic}\n\n"
-        f"Full transcript:\n{format_transcript(entries)}\n\n"
-        "Deliver your final verdict."
+        f"Вопрос для спора:\n{topic}\n\n"
+        f"Полный транскрипт:\n{format_transcript(entries)}\n\n"
+        "Дай финальный вердикт."
     )
 
 
@@ -172,7 +180,7 @@ def read_context_file(path_str: str) -> str | None:
     path = Path(path_str)
     try:
         if path.stat().st_size > MAX_FILE_BYTES:
-            raise VersusError("File too large (max 200KB)")
+            raise VersusError("Файл слишком большой. Максимум 200 КБ.")
         return path.read_text(encoding="utf-8")
     except OSError:
         return None
@@ -190,14 +198,14 @@ def build_transcript_md(
     model_a, model_b = models
     date = datetime.now().strftime("%Y-%m-%d %H:%M")
     out = [
-        "# VERSUS — Debate",
+        "# VERSUS: спор",
         "",
-        f"- **Topic:** {question}",
-        f"- **Agent A:** {model_a}",
-        f"- **Agent B:** {model_b}",
-        f"- **File:** {file or '—'}",
-        f"- **Rounds:** {rounds}",
-        f"- **Date:** {date}",
+        f"- **Вопрос:** {question}",
+        f"- **Агент A:** {model_a}",
+        f"- **Агент B:** {model_b}",
+        f"- **Файл:** {file or 'нет'}",
+        f"- **Раундов:** {rounds}",
+        f"- **Дата:** {date}",
         "",
         "---",
         "",
@@ -207,23 +215,23 @@ def build_transcript_md(
         by_round.setdefault(entry["round"], {})[entry["speaker"]] = entry["text"]
     for rnd in sorted(by_round):
         out += [
-            f"## Round {rnd}",
+            f"## Раунд {rnd}",
             "",
-            "### 🟠 Agent A",
+            "### 🟠 Агент A",
             "",
-            by_round[rnd].get("Agent A", "_(no response)_"),
+            by_round[rnd].get("Agent A", "_(ответа нет)_"),
             "",
-            "### 🔵 Agent B",
+            "### 🔵 Агент B",
             "",
-            by_round[rnd].get("Agent B", "_(no response)_"),
+            by_round[rnd].get("Agent B", "_(ответа нет)_"),
             "",
         ]
     out += [
         "---",
         "",
-        "## ⚖️ Judge — Final Verdict",
+        "## ⚖️ Судья: финальный вердикт",
         "",
-        verdict or "_(no verdict)_",
+        verdict or "_(вердикта нет)_",
         "",
     ]
     return "\n".join(out)
@@ -269,26 +277,26 @@ def print_banner(console: Console) -> None:
     """Render the VERSUS ASCII banner, tagline, and version."""
     figlet = pyfiglet.figlet_format("VERSUS", font="big")
     console.print(Text(figlet.rstrip("\n"), style=f"bold {ORANGE}"))
-    console.print(Text("LLMs don't agree. That's the point.", style=AMBER))
+    console.print(Text("Модели спорят. Судья решает.", style=AMBER))
     console.print(Text(f"v{VERSION}", style="dim white"))
     console.print()
 
 
 def print_topic(console: Console, question: str, file: str | None, rounds: int) -> None:
     """Show the debate topic panel."""
-    file_label = file if file else "—"
+    file_label = file if file else "нет"
     body = Text()
     body.append(question)
     body.append("\n")
-    body.append(f"File: {file_label}  │  Rounds: {rounds}", style="dim")
-    console.print(Panel(body, title="Topic", border_style=AMBER, expand=False))
+    body.append(f"Файл: {file_label}  │  Раундов: {rounds}", style="dim")
+    console.print(Panel(body, title="Вопрос", border_style=AMBER, expand=False))
     console.print()
 
 
 def error_exit(console: Console, message: str) -> None:
     """Print a red error panel and exit with status 1."""
     console.print(
-        Panel(Text(message, style="bold red"), title="Error", border_style="red")
+        Panel(Text(message, style="bold red"), title="Ошибка", border_style="red")
     )
     sys.exit(1)
 
@@ -321,16 +329,16 @@ def call_model(
                 raise
             wait = int(round(_retry_wait(exc, attempt)))
             if status is not None:
-                status.update(f"[yellow]Rate limited. Retrying in {wait}s...")
+                status.update(f"[yellow]Лимит запросов. Повтор через {wait} с...")
             time.sleep(wait)
             if status is not None and idle_label is not None:
                 status.update(idle_label)
             continue
         if not response.choices:
-            raise VersusError("Model returned empty response")
+            raise VersusError("Модель вернула пустой ответ.")
         content = response.choices[0].message.content
         return (content or "").strip()
-    raise VersusError("Model returned empty response")  # safety net (unreachable)
+    raise VersusError("Модель вернула пустой ответ.")  # safety net (unreachable)
 
 
 def cli_agent_turn(
@@ -349,7 +357,7 @@ def cli_agent_turn(
 ) -> None:
     """Run one agent's turn: call the model under a spinner, print its panel."""
     user_content = agent_user_content(topic, entries)
-    idle = f"[{border}]{label} is thinking..."
+    idle = f"[{border}]{label} думает..."
     with console.status(idle, spinner="dots", spinner_style=border) as status:
         text = call_model(client, model, system_prompt, user_content, status=status, idle_label=idle)
     entries.append({"speaker": speaker, "round": rnd, "text": text})
@@ -372,13 +380,13 @@ def cli_run_debate(
             console, client,
             model=model_a, system_prompt=SYSTEM_A, topic=topic, entries=entries,
             speaker="Agent A", rnd=rnd,
-            label="Agent A", border=ORANGE, title=f"🟠 Agent A — Round {rnd}",
+            label="Агент A", border=ORANGE, title=f"🟠 Агент A: раунд {rnd}",
         )
         cli_agent_turn(
             console, client,
             model=model_b, system_prompt=SYSTEM_B, topic=topic, entries=entries,
             speaker="Agent B", rnd=rnd,
-            label="Agent B", border=BLUE, title=f"🔵 Agent B — Round {rnd}",
+            label="Агент B", border=BLUE, title=f"🔵 Агент B: раунд {rnd}",
         )
 
 
@@ -391,11 +399,11 @@ def cli_run_judge(
 ) -> str:
     """Run the Judge, print the verdict panel, and return the verdict text."""
     user_content = judge_user_content(topic, entries)
-    idle = f"[{AMBER}]Judge is thinking..."
+    idle = f"[{AMBER}]Судья думает..."
     with console.status(idle, spinner="dots", spinner_style=AMBER) as status:
         text = call_model(client, model, SYSTEM_JUDGE, user_content, status=status, idle_label=idle)
     console.print(
-        Panel(Text(text), title="⚖️  JUDGE — Final Verdict", border_style=AMBER, expand=False)
+        Panel(Text(text), title="⚖️  Судья: финальный вердикт", border_style=AMBER, expand=False)
     )
     return text
 
@@ -408,10 +416,10 @@ def _install_sigint_handler(console: Console) -> None:
     def handler(signum, frame):  # noqa: ANN001
         now = time.monotonic()
         if now - _sigint_state["last"] < 3:
-            console.print("\n[bold red]Debate interrupted.[/]")
+            console.print("\n[bold red]Спор остановлен.[/]")
             sys.exit(130)
         _sigint_state["last"] = now
-        console.print("\n[yellow]Press Ctrl+C again to exit[/]")
+        console.print("\n[yellow]Нажми Ctrl+C еще раз, чтобы выйти[/]")
 
     try:
         signal.signal(signal.SIGINT, handler)
@@ -433,16 +441,16 @@ def run_cli(args: argparse.Namespace) -> None:
     if args.file:
         path = Path(args.file)
         if not path.is_file():
-            error_exit(console, f"File not found: {args.file}")
+            error_exit(console, f"Файл не найден: {args.file}")
         try:
             file_content = read_context_file(args.file)
         except VersusError as exc:
             error_exit(console, str(exc))
         if file_content is None:
-            error_exit(console, f"Could not read file: {args.file}")
+            error_exit(console, f"Не удалось прочитать файл: {args.file}")
 
     if args.rounds < 1:
-        error_exit(console, "--rounds must be at least 1.")
+        error_exit(console, "--rounds должен быть не меньше 1.")
 
     topic = build_initial_context(args.question, args.file, file_content)
     print_topic(console, args.question, args.file, args.rounds)
@@ -457,19 +465,19 @@ def run_cli(args: argparse.Namespace) -> None:
     except OpenAIError as exc:
         status_code = getattr(exc, "status_code", None)
         prefix = f"[{status_code}] " if status_code else ""
-        error_exit(console, f"API error: {prefix}{exc}")
+        error_exit(console, f"Ошибка API: {prefix}{exc}")
     except VersusError as exc:
         error_exit(console, str(exc))
     except Exception as exc:  # noqa: BLE001 - surface any unexpected failure cleanly
-        error_exit(console, f"Unexpected error: {exc}")
+        error_exit(console, f"Неожиданная ошибка: {exc}")
 
     if args.output:
         md = build_transcript_md(args.question, args.models, args.file, args.rounds, entries, verdict)
         try:
             Path(args.output).write_text(md, encoding="utf-8")
-            console.print(f"[green]Saved to {args.output}[/]")
+            console.print(f"[green]Сохранено: {args.output}[/]")
         except OSError as exc:
-            console.print(f"[red]Could not save to {args.output}: {exc}[/]")
+            console.print(f"[red]Не удалось сохранить в {args.output}: {exc}[/]")
 
 
 # --- Textual TUI -------------------------------------------------------------
@@ -532,19 +540,19 @@ if _TEXTUAL_OK:
         def compose(self) -> ComposeResult:
             yield Header()
             with Vertical(id="input-form"):
-                yield Label("VERSUS — set up a debate", id="input-title")
-                yield Label("Question:")
-                yield Input(placeholder="Is PostgreSQL better than MongoDB?", id="question")
-                yield Label("Context file (optional):")
+                yield Label("VERSUS: настрой спор", id="input-title")
+                yield Label("Вопрос:")
+                yield Input(placeholder="PostgreSQL лучше MongoDB?", id="question")
+                yield Label("Файл с контекстом (необязательно):")
                 yield Input(placeholder="path/to/schema.sql", id="file")
-                yield Label("Rounds:")
+                yield Label("Раундов:")
                 yield Select(
                     [(str(i), i) for i in range(1, 6)],
                     value=2,
                     allow_blank=False,
                     id="rounds",
                 )
-                yield Button("Start Debate", variant="primary", id="start")
+                yield Button("Начать спор", variant="primary", id="start")
             yield Footer()
 
         def on_mount(self) -> None:
@@ -560,20 +568,20 @@ if _TEXTUAL_OK:
         def _start(self) -> None:
             question = self.query_one("#question", Input).value.strip()
             if not question:
-                self.notify("Please enter a question.", severity="error")
+                self.notify("Введи вопрос.", severity="error")
                 return
             file_path = self.query_one("#file", Input).value.strip() or None
             if file_path:
                 p = Path(file_path)
                 if not p.is_file():
-                    self.notify(f"File not found: {file_path}", severity="error")
+                    self.notify(f"Файл не найден: {file_path}", severity="error")
                     return
                 try:
                     if p.stat().st_size > MAX_FILE_BYTES:
-                        self.notify("File too large (max 200KB)", severity="error")
+                        self.notify("Файл слишком большой. Максимум 200 КБ.", severity="error")
                         return
                 except OSError:
-                    self.notify(f"Could not read file: {file_path}", severity="error")
+                    self.notify(f"Не удалось прочитать файл: {file_path}", severity="error")
                     return
             rounds = int(self.query_one("#rounds", Select).value)
             self.app.push_screen(DebateScreen(question, file_path, rounds))
@@ -582,8 +590,8 @@ if _TEXTUAL_OK:
         """Screen 2: split A/B debate that streams in real time, then the verdict."""
 
         BINDINGS = [
-            ("r", "restart", "New question"),
-            ("s", "save", "Save"),
+            ("r", "restart", "Новый вопрос"),
+            ("s", "save", "Сохранить"),
         ]
 
         def __init__(self, question: str, file_path: str | None, rounds: int) -> None:
@@ -603,9 +611,9 @@ if _TEXTUAL_OK:
             yield Footer()
 
         def on_mount(self) -> None:
-            self.query_one("#agent-a").border_title = "🟠 Agent A"
-            self.query_one("#agent-b").border_title = "🔵 Agent B"
-            self.query_one("#judge").border_title = "⚖️  Judge — Final Verdict"
+            self.query_one("#agent-a").border_title = "🟠 Агент A"
+            self.query_one("#agent-b").border_title = "🔵 Агент B"
+            self.query_one("#judge").border_title = "⚖️  Судья: финальный вердикт"
             self.run_debate()
 
         def action_restart(self) -> None:
@@ -614,7 +622,7 @@ if _TEXTUAL_OK:
 
         def action_save(self) -> None:
             if not self.entries:
-                self.notify("Nothing to save yet.", severity="warning")
+                self.notify("Пока нечего сохранять.", severity="warning")
                 return
             md = build_transcript_md(
                 self.question, self.app.models, self.file_path, self.rounds,
@@ -623,9 +631,9 @@ if _TEXTUAL_OK:
             out = Path("debate.md")
             try:
                 out.write_text(md, encoding="utf-8")
-                self.notify(f"Saved to {out}")
+                self.notify(f"Сохранено: {out}")
             except OSError as exc:
-                self.notify(f"Could not save: {exc}", severity="error")
+                self.notify(f"Не удалось сохранить: {exc}", severity="error")
 
         async def _stream_turn(
             self,
@@ -638,7 +646,7 @@ if _TEXTUAL_OK:
         ) -> str:
             """Stream one model response token-by-token, retrying on 429."""
             if rnd is not None:
-                await panel.mount(Static(f"── Round {rnd} ──", classes="round-header"))
+                await panel.mount(Static(f"── Раунд {rnd} ──", classes="round-header"))
             body = Static("", classes="arg-body")
             await panel.mount(body)
             panel.scroll_end(animate=False)
@@ -664,17 +672,17 @@ if _TEXTUAL_OK:
                             panel.scroll_end(animate=False)
                     text = "".join(chunks).strip()
                     if not text:
-                        raise VersusError("Model returned empty response")
+                        raise VersusError("Модель вернула пустой ответ.")
                     return text
                 except RateLimitError as exc:
                     if attempt >= MAX_RETRIES:
                         raise
                     wait = int(round(_retry_wait(exc, attempt)))
                     for remaining in range(wait, 0, -1):
-                        body.update(Text(f"⏳ Rate limited. Retrying in {remaining}s...", style="yellow"))
+                        body.update(Text(f"⏳ Лимит запросов. Повтор через {remaining} с...", style="yellow"))
                         await asyncio.sleep(1)
                     body.update("")
-            raise VersusError("Model returned empty response")  # unreachable
+            raise VersusError("Модель вернула пустой ответ.")  # unreachable
 
         async def _fail(self, panel: VerticalScroll, message: str) -> None:
             self.notify(message, severity="error", timeout=10)
@@ -712,9 +720,9 @@ if _TEXTUAL_OK:
             except VersusError as exc:
                 await self._fail(judge_panel, str(exc))
             except OpenAIError as exc:
-                await self._fail(judge_panel, f"API error: {exc}")
+                await self._fail(judge_panel, f"Ошибка API: {exc}")
             except Exception as exc:  # noqa: BLE001 - surface any failure in-app
-                await self._fail(judge_panel, f"Unexpected error: {exc}")
+                await self._fail(judge_panel, f"Неожиданная ошибка: {exc}")
             finally:
                 await client.close()
 
@@ -723,10 +731,10 @@ if _TEXTUAL_OK:
 
         CSS = TUI_CSS
         TITLE = "VERSUS"
-        SUB_TITLE = "LLMs don't agree. That's the point."
+        SUB_TITLE = "Модели спорят. Судья решает."
         BINDINGS = [
-            ("q", "quit", "Quit"),
-            Binding("ctrl+c", "request_quit", "Quit", priority=True, show=False),
+            ("q", "quit", "Выйти"),
+            Binding("ctrl+c", "request_quit", "Выйти", priority=True, show=False),
         ]
 
         def __init__(self, models: list[str], api_key: str) -> None:
@@ -747,7 +755,7 @@ if _TEXTUAL_OK:
                 self.exit()
             else:
                 self._last_ctrlc = now
-                self.notify("Press Ctrl+C again to exit", severity="warning", timeout=3)
+                self.notify("Нажми Ctrl+C еще раз, чтобы выйти", severity="warning", timeout=3)
 
 
 def run_tui(models: list[str]) -> None:
@@ -756,7 +764,7 @@ def run_tui(models: list[str]) -> None:
     if not _TEXTUAL_OK:
         error_exit(
             console,
-            "Textual is not installed. Run: pip install \"textual>=0.60.0\"",
+            "Textual не установлен. Выполни: pip install \"textual>=0.60.0\"",
         )
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
@@ -766,39 +774,74 @@ def run_tui(models: list[str]) -> None:
 
 # --- Entry point -------------------------------------------------------------
 
+class RussianArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser with Russian labels for the visible help menu."""
+
+    def format_help(self) -> str:
+        text = super().format_help()
+        return (
+            text
+            .replace("usage:", "использование:")
+            .replace("positional arguments:", "аргументы:")
+            .replace("options:", "параметры:")
+            .replace("show this help message and exit", "показать справку и выйти")
+        )
+
+    def format_usage(self) -> str:
+        return super().format_usage().replace("usage:", "использование:")
+
+    @staticmethod
+    def _translate_error(message: str) -> str:
+        replacements = {
+            "unrecognized arguments": "неизвестные аргументы",
+            "the following arguments are required": "нужны аргументы",
+            "expected 2 arguments": "нужно указать 2 значения",
+            "invalid int value": "не число",
+            "argument": "аргумент",
+        }
+        for old, new in replacements.items():
+            message = message.replace(old, new)
+        return message
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: ошибка: {self._translate_error(message)}\n")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
+    parser = RussianArgumentParser(
         prog="versus",
         description=(
-            "Two LLMs debate a question across N rounds, then a Judge delivers a "
-            "verdict. Run with no question to launch the full-screen TUI."
+            "Два LLM спорят по вопросу несколько раундов, потом судья выносит "
+            "вердикт. Запусти без вопроса, чтобы открыть полноэкранный TUI."
         ),
     )
     parser.add_argument(
         "question",
         nargs="?",
         default=None,
-        help="the question to debate (omit to launch the interactive TUI)",
+        help="вопрос для спора (не указывай, если нужен TUI)",
     )
-    parser.add_argument("--file", default=None, help="path to a file for additional context")
-    parser.add_argument("--rounds", type=int, default=2, help="number of debate rounds (default: 2)")
+    parser.add_argument("--file", default=None, help="путь к файлу с контекстом")
+    parser.add_argument("--rounds", type=int, default=2, help="число раундов (по умолчанию: 2)")
     parser.add_argument(
         "--models",
         nargs=2,
         metavar=("MODEL_A", "MODEL_B"),
         default=[DEFAULT_MODEL_A, DEFAULT_MODEL_B],
-        help="two OpenRouter model slugs, space-separated (Agent A then Agent B)",
+        help="две модели OpenRouter через пробел: сначала агент A, потом агент B",
     )
     parser.add_argument(
         "--output",
         default=None,
         metavar="PATH",
-        help="save the full debate transcript as Markdown to PATH",
+        help="сохранить полный спор в Markdown-файл PATH",
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"versus-llm {VERSION}",
+        help="показать версию и выйти",
     )
     return parser.parse_args(argv)
 

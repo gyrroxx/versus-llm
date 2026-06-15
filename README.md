@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/versus-llm.webp" alt="versus-llm banner" width="100%">
+</p>
+
 # versus-llm
 
 **Two LLMs enter. One verdict leaves.**
@@ -49,7 +53,7 @@ config directory, so you do not need to create a `.env` file manually.
 versus "React or Vue?"
 versus "Is Rust worth learning in 2025?"
 versus "Which database fits this schema?" --file schema.sql
-versus "Best state manager for React?" --rounds 3 --models google/gemma-4-31b-it:free openai/gpt-oss-120b:free
+versus "Best state manager for React?" --rounds 3 --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
 versus "Is PostgreSQL better than MongoDB?" --output debate.md   # save transcript
 versus --version
 ```
@@ -61,9 +65,9 @@ versus --version
 | `question`  | positional; **omit it to launch the interactive TUI**       | —                                        |
 | `--file`    | path to a file for additional context (max 200KB)           | none                                     |
 | `--rounds`  | number of debate rounds                                     | `2`                                      |
-| `--models`  | two model slugs (Agent A then Agent B)                      | `google/gemma-4-31b-it:free` and `openai/gpt-oss-120b:free` |
+| `--models`  | two model slugs (Agent A then Agent B)                      | `openai/gpt-oss-120b:free` and `google/gemma-4-31b-it:free` |
 | `--output`  | save the full debate transcript as Markdown to a path       | none                                     |
-| `--version` | print `versus-llm 1.1` and exit                             | —                                        |
+| `--version` | print `versus-llm 1.2` and exit                             | —                                        |
 
 ### Commands
 
@@ -81,7 +85,7 @@ versus --version
 > other models via `--models`, e.g.:
 >
 > ```bash
-> versus "your question" --models google/gemma-4-31b-it:free openai/gpt-oss-120b:free
+> versus "your question" --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
 > ```
 
 ## Interactive TUI

@@ -72,16 +72,23 @@ class ConfigEnvTests(unittest.TestCase):
     def test_setup_api_key_writes_saved_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_env = Path(tmp) / "config" / ".env"
+            output = io.StringIO()
 
             with patch("versus.get_config_env_path", return_value=config_env):
                 with patch("versus.getpass", return_value="sk-test-key"):
-                    with redirect_stdout(io.StringIO()):
+                    with redirect_stdout(output):
                         versus.setup_api_key()
 
             self.assertEqual(
                 config_env.read_text(encoding="utf-8"),
                 "OPENROUTER_API_KEY=sk-test-key\n",
             )
+            self.assertIn("sk-t...-key", output.getvalue())
+            self.assertNotIn("sk-test-key", output.getvalue())
+
+    def test_mask_api_key_keeps_preview_without_revealing_full_secret(self) -> None:
+        self.assertEqual(versus.mask_api_key("sk-test-key"), "sk-t...-key")
+        self.assertEqual(versus.mask_api_key("short"), "*****")
 
     def test_setup_api_key_rejects_empty_input(self) -> None:
         with patch("versus.getpass", return_value="  "):
