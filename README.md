@@ -1,117 +1,229 @@
-<p align="center">
-  <img src="./assets/versus-llm.webp" alt="versus-llm banner" width="100%">
-</p>
-
 # versus-llm
 
-**Two LLMs enter. One verdict leaves.**
+<p align="center">
+  <img src="./assets/versus-llm.webp" alt="versus-llm" width="100%">
+</p>
 
-A Python CLI/TUI where two LLMs debate a question across N rounds — Agent A argues
-**for**, Agent B **challenges** — and then a Judge delivers a final verdict.
-Powered by [OpenRouter](https://openrouter.ai), with a Rich terminal UI.
+`versus` запускает спор двух LLM прямо в терминале. Один агент защищает идею, второй спорит с ним, потом судья дает короткий вердикт.
+
+Подходит для вопросов вроде:
 
 ```bash
-# Classic CLI mode (pass a question)
-versus "Is PostgreSQL better than MongoDB?" --file schema.sql --rounds 2
-
-# Interactive TUI mode (no question)
-versus
+versus "React или Vue?"
+versus "PostgreSQL или MongoDB для моего проекта?"
+versus "Стоит ли брать FastAPI вместо Django?"
 ```
 
-<!-- add screenshot here -->
+## Установка
 
-## Install
+Нужен Python 3.10 или новее.
 
 ```bash
 pip install versus-llm
 ```
 
-For local development from this repository:
+Проверь, что команда установилась:
 
 ```bash
-pip install -e .
+versus --version
 ```
 
-## Setup
+Ожидаемый вывод:
 
-You need your own OpenRouter API key. Get one here:
-<https://openrouter.ai/keys>
+```text
+versus-llm 1.2
+```
+
+## Настройка OpenRouter
+
+`versus` работает через OpenRouter, поэтому нужен свой API-ключ. Это не сложно: один раз создаешь ключ, вставляешь его в `versus setup`, дальше CLI сам его хранит.
+
+### Как получить ключ
+
+1. Открой страницу: <https://openrouter.ai/keys>
+2. Войди в аккаунт OpenRouter.
+3. Нажми кнопку создания ключа.
+4. Скопируй ключ.
+
+По сути, это делается в 2 клика: создать ключ и скопировать его. Вручную создавать `.env` не нужно.
+
+### Как сохранить ключ в versus
 
 ```bash
 versus setup
 ```
 
-`versus login` does the same thing. The key is saved locally in your user
-config directory, so you do not need to create a `.env` file manually.
+CLI спросит:
 
-`OPENROUTER_API_KEY` is still supported as an environment variable, and a
-`.env` file in the current working directory is still supported.
+```text
+Вставь API-ключ OpenRouter:
+```
 
-## Usage
+Вставь ключ и нажми Enter. Символы при вводе скрыты, но после сохранения `versus` покажет короткую маску ключа, например:
+
+```text
+API-ключ OpenRouter сохранен (sk-o...abcd): C:\Users\...\versus-llm\.env
+```
+
+Команда `versus login` делает то же самое:
 
 ```bash
-versus "React or Vue?"
-versus "Is Rust worth learning in 2025?"
-versus "Which database fits this schema?" --file schema.sql
-versus "Best state manager for React?" --rounds 3 --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
-versus "Is PostgreSQL better than MongoDB?" --output debate.md   # save transcript
+versus login
+```
+
+Если ключ не настроен, `versus` напишет:
+
+```text
+API-ключ OpenRouter не настроен.
+
+Запусти:
+  versus setup
+```
+
+## Первый запуск
+
+После настройки ключа запусти простой спор:
+
+```bash
+versus "React или Vue?"
+```
+
+Что произойдет:
+
+1. Агент A даст сильный аргумент.
+2. Агент B разберет слабые места и возразит.
+3. Раунды повторятся заданное число раз.
+4. Судья прочитает спор и даст вердикт.
+
+Если вопрос на русском, судья должен отвечать на русском.
+
+## Основные команды
+
+### Задать вопрос
+
+```bash
+versus "Стоит ли учить Rust в 2026?"
+```
+
+### Указать число раундов
+
+```bash
+versus "React или Vue?" --rounds 3
+```
+
+По умолчанию используется 2 раунда.
+
+### Добавить файл с контекстом
+
+```bash
+versus "Какая база лучше подходит под эту схему?" --file schema.sql
+```
+
+Файл должен быть не больше 200 КБ. Его текст добавляется к вопросу как контекст для обоих агентов.
+
+### Сохранить спор в Markdown
+
+```bash
+versus "PostgreSQL или MongoDB?" --output debate.md
+```
+
+После завершения появится файл `debate.md` с вопросом, ответами агентов и вердиктом судьи.
+
+### Выбрать модели вручную
+
+```bash
+versus "React или Vue?" --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
+```
+
+Порядок важен:
+
+```text
+--models MODEL_A MODEL_B
+```
+
+Первая модель отвечает за агента A, вторая за агента B.
+
+## Режим TUI
+
+Если запустить `versus` без вопроса, откроется полноэкранный режим:
+
+```bash
+versus
+```
+
+Там можно ввести вопрос, путь к файлу с контекстом и число раундов.
+
+Горячие клавиши:
+
+| Клавиша | Что делает |
+| --- | --- |
+| `S` | сохранить спор в `debate.md` |
+| `r` | вернуться к новому вопросу |
+| `q` | выйти |
+| `Ctrl+C` | выйти после повторного нажатия |
+
+## Параметры CLI
+
+| Параметр | Что делает | По умолчанию |
+| --- | --- | --- |
+| `question` | вопрос для спора | открывает TUI, если вопрос не указан |
+| `--file` | путь к файлу с контекстом | нет |
+| `--rounds` | число раундов | `2` |
+| `--models` | две модели OpenRouter: агент A и агент B | `openai/gpt-oss-120b:free` и `google/gemma-4-31b-it:free` |
+| `--output` | путь для сохранения Markdown-файла | нет |
+| `--version` | показать версию | `1.2` |
+
+## Где хранится ключ
+
+`versus setup` сохраняет ключ локально:
+
+| Система | Путь |
+| --- | --- |
+| Windows | `%APPDATA%/versus-llm/.env` |
+| macOS/Linux | `~/.config/versus-llm/.env` |
+
+Также работают старые способы:
+
+```bash
+OPENROUTER_API_KEY=your_key_here
+```
+
+и файл `.env` в текущей папке.
+
+Приоритет такой:
+
+1. Переменная окружения `OPENROUTER_API_KEY`.
+2. `.env` в текущей папке.
+3. Конфиг, созданный через `versus setup`.
+
+## Если бесплатная модель не отвечает
+
+Бесплатные модели OpenRouter иногда возвращают `429`: провайдер временно ограничил запросы. `versus` сам делает повторные попытки, но иногда нужно подождать и запустить команду еще раз.
+
+Если проблема повторяется:
+
+```bash
+versus "твой вопрос" --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
+```
+
+Можно выбрать другие модели OpenRouter через `--models`.
+
+## Локальная разработка
+
+Если ты клонировал репозиторий:
+
+```bash
+pip install -e .
+```
+
+Проверки:
+
+```bash
+python -m py_compile versus.py
+python -m unittest discover tests
 versus --version
 ```
 
-### Arguments
+## Лицензия
 
-| Arg         | Description                                                  | Default                                  |
-|-------------|-------------------------------------------------------------|------------------------------------------|
-| `question`  | positional; **omit it to launch the interactive TUI**       | —                                        |
-| `--file`    | path to a file for additional context (max 200KB)           | none                                     |
-| `--rounds`  | number of debate rounds                                     | `2`                                      |
-| `--models`  | two model slugs (Agent A then Agent B)                      | `openai/gpt-oss-120b:free` and `google/gemma-4-31b-it:free` |
-| `--output`  | save the full debate transcript as Markdown to a path       | none                                     |
-| `--version` | print `versus-llm 1.2` and exit                             | —                                        |
-
-### Commands
-
-| Command        | Description                                      |
-|----------------|--------------------------------------------------|
-| `versus setup` | save your OpenRouter API key to local config     |
-| `versus login` | same as `versus setup`                           |
-
-> **Note on free models:** the defaults are free-tier models and can occasionally
-> return a transient `429` ("rate-limited upstream") when providers are busy.
-> `versus` automatically retries up to 3 times with backoff (honoring the
-> server's `Retry-After`), so most hiccups recover on their own. If it still
-> fails, add your own provider key in your
-> [OpenRouter settings](https://openrouter.ai/settings/integrations), or swap in
-> other models via `--models`, e.g.:
->
-> ```bash
-> versus "your question" --models openai/gpt-oss-120b:free google/gemma-4-31b-it:free
-> ```
-
-## Interactive TUI
-
-Run `versus` with **no question** to launch a full-screen terminal app:
-
-1. **Input screen** — type your question, an optional context file, and pick the
-   number of rounds (1–5).
-2. **Debate screen** — Agent A (left, 🟠) and Agent B (right, 🔵) stream their
-   arguments in real time, then the Judge's verdict (⚖️) appears at the bottom.
-
-### Keybindings
-
-| Key   | Action                                            |
-|-------|---------------------------------------------------|
-| `S`   | Save the transcript to `debate.md`                |
-| `r`   | Restart with a new question                       |
-| `q`   | Quit                                              |
-| `Ctrl+C` | Quit (press twice within 3s to confirm)        |
-
-## How it works
-
-1. **Agent A** (🟠) makes the strongest case *for* / proposes the best solution.
-2. **Agent B** (🔵) challenges Agent A, finds flaws, proposes alternatives.
-3. Steps 1–2 repeat for `--rounds` rounds.
-4. The **Judge** (⚖️) reads the full transcript and delivers a decisive verdict.
-
-When `--file` is supplied, its contents are prepended as context to the question
-for both agents.
+MIT.
