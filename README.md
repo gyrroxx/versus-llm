@@ -49,7 +49,7 @@ config directory, so you do not need to create a `.env` file manually.
 versus "React or Vue?"
 versus "Is Rust worth learning in 2025?"
 versus "Which database fits this schema?" --file schema.sql
-versus "Best state manager for React?" --rounds 3 --models google/gemma-4-31b-it:free meta-llama/llama-3.3-70b-instruct:free
+versus "Best state manager for React?" --rounds 3 --models google/gemma-4-31b-it:free openai/gpt-oss-120b:free
 versus "Is PostgreSQL better than MongoDB?" --output debate.md   # save transcript
 versus --version
 ```
@@ -61,9 +61,9 @@ versus --version
 | `question`  | positional; **omit it to launch the interactive TUI**       | —                                        |
 | `--file`    | path to a file for additional context (max 200KB)           | none                                     |
 | `--rounds`  | number of debate rounds                                     | `2`                                      |
-| `--models`  | two model slugs (Agent A then Agent B)                      | `google/gemma-4-31b-it:free` and `meta-llama/llama-3.3-70b-instruct:free` |
+| `--models`  | two model slugs (Agent A then Agent B)                      | `google/gemma-4-31b-it:free` and `openai/gpt-oss-120b:free` |
 | `--output`  | save the full debate transcript as Markdown to a path       | none                                     |
-| `--version` | print `versus-llm 1.0.1` and exit                           | —                                        |
+| `--version` | print `versus-llm 1.1` and exit                             | —                                        |
 
 ### Commands
 
@@ -81,7 +81,7 @@ versus --version
 > other models via `--models`, e.g.:
 >
 > ```bash
-> versus "your question" --models google/gemma-2-9b-it:free meta-llama/llama-3.3-70b-instruct:free
+> versus "your question" --models google/gemma-4-31b-it:free openai/gpt-oss-120b:free
 > ```
 
 ## Interactive TUI

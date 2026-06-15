@@ -31,11 +31,11 @@ from rich.text import Text
 
 # --- Constants ---------------------------------------------------------------
 
-VERSION = "1.0.1"
+VERSION = "1.1"
 BASE_URL = "https://openrouter.ai/api/v1"
 
 DEFAULT_MODEL_A = "google/gemma-4-31b-it:free"
-DEFAULT_MODEL_B = "meta-llama/llama-3.3-70b-instruct:free"
+DEFAULT_MODEL_B = "openai/gpt-oss-120b:free"
 
 ORANGE = "#FF6B35"  # Agent A / banner
 BLUE = "#4FC3F7"    # Agent B

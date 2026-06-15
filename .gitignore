@@ -1,5 +1,6 @@
 .env
 .env.example
+.SKILL.md
 __pycache__/
 *.pyc
 *.pyo
