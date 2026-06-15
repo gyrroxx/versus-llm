@@ -18,37 +18,35 @@ versus
 
 ## Install
 
-### Option 1 — pip install
-
 ```bash
-pip install .
-versus "your question"
+pip install versus-llm
 ```
 
-### Option 2 — run directly
+For local development from this repository:
 
 ```bash
-pip install -r requirements.txt
-python versus.py "your question"
+pip install -e .
 ```
 
 ## Setup
 
+You need your own OpenRouter API key. Get one here:
+<https://openrouter.ai/keys>
+
 ```bash
-cp .env.example .env
+versus setup
 ```
 
-Then open `.env` and add your OpenRouter API key:
+`versus login` does the same thing. The key is saved locally in your user
+config directory, so you do not need to create a `.env` file manually.
 
-```
-OPENROUTER_API_KEY=your_key_here
-```
-
-Get a key here: <https://openrouter.ai/keys>
+`OPENROUTER_API_KEY` is still supported as an environment variable, and a
+`.env` file in the current working directory is still supported.
 
 ## Usage
 
 ```bash
+versus "React or Vue?"
 versus "Is Rust worth learning in 2025?"
 versus "Which database fits this schema?" --file schema.sql
 versus "Best state manager for React?" --rounds 3 --models google/gemma-4-31b-it:free meta-llama/llama-3.3-70b-instruct:free
@@ -65,7 +63,14 @@ versus --version
 | `--rounds`  | number of debate rounds                                     | `2`                                      |
 | `--models`  | two model slugs (Agent A then Agent B)                      | `google/gemma-4-31b-it:free` and `meta-llama/llama-3.3-70b-instruct:free` |
 | `--output`  | save the full debate transcript as Markdown to a path       | none                                     |
-| `--version` | print `versus-llm 1.0.0` and exit                           | —                                        |
+| `--version` | print `versus-llm 1.0.1` and exit                           | —                                        |
+
+### Commands
+
+| Command        | Description                                      |
+|----------------|--------------------------------------------------|
+| `versus setup` | save your OpenRouter API key to local config     |
+| `versus login` | same as `versus setup`                           |
 
 > **Note on free models:** the defaults are free-tier models and can occasionally
 > return a transient `429` ("rate-limited upstream") when providers are busy.

@@ -19,6 +19,7 @@ import signal
 import sys
 import time
 from datetime import datetime
+from getpass import getpass
 from pathlib import Path
 
 import pyfiglet
@@ -30,7 +31,7 @@ from rich.text import Text
 
 # --- Constants ---------------------------------------------------------------
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 BASE_URL = "https://openrouter.ai/api/v1"
 
 DEFAULT_MODEL_A = "google/gemma-4-31b-it:free"
@@ -75,8 +76,10 @@ SYSTEM_JUDGE = (
 
 MISSING_KEY_MSG = (
     "OPENROUTER_API_KEY is not set.\n\n"
-    "Copy .env.example to .env and add your key, or export the variable.\n"
-    "Get a key at https://openrouter.ai/keys"
+    "Run:\n"
+    "  versus setup\n\n"
+    "Get a key at:\n"
+    "  https://openrouter.ai/keys"
 )
 
 # OpenRouter-recommended (optional) attribution headers.
@@ -91,6 +94,40 @@ class VersusError(Exception):
 
 
 # --- Shared helpers ----------------------------------------------------------
+
+def get_config_env_path() -> Path:
+    """Return the persistent user config .env path for the current platform."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA")
+        config_dir = Path(base) if base else Path.home() / "AppData" / "Roaming"
+    else:
+        config_dir = Path.home() / ".config"
+    return config_dir / "versus-llm" / ".env"
+
+
+def setup_api_key() -> None:
+    """Prompt once for the OpenRouter API key and save it to user config."""
+    console = Console()
+    api_key = getpass("OpenRouter API key: ").strip()
+    if not api_key:
+        error_exit(console, "OpenRouter API key cannot be empty.")
+
+    path = get_config_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"OPENROUTER_API_KEY={api_key}\n", encoding="utf-8")
+    if os.name != "nt":
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    console.print(f"[green]Saved OpenRouter API key to {path}[/]")
+
+
+def load_api_key_env() -> None:
+    """Load API key from env, cwd .env, then persistent config .env."""
+    load_dotenv(Path.cwd() / ".env", override=False)
+    load_dotenv(get_config_env_path(), override=False)
+
 
 def build_initial_context(question: str, filename: str | None, content: str | None) -> str:
     """Prepend file context to the question when a context file is supplied."""
@@ -782,9 +819,13 @@ def _force_utf8_output() -> None:
 
 def main() -> None:
     _force_utf8_output()
+    argv = sys.argv[1:]
+    if argv and argv[0] in {"setup", "login"}:
+        setup_api_key()
+        return
+
+    load_api_key_env()
     args = parse_args()
-    # Only read a .env sitting next to this file; never walk parent directories.
-    load_dotenv(Path(__file__).parent / ".env", override=False)
 
     if args.question is None:
         run_tui(args.models)
