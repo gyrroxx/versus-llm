@@ -31,11 +31,12 @@ from rich.text import Text
 
 # --- Constants ---------------------------------------------------------------
 
-VERSION = "1.2"
+VERSION = "1.3.0"
 BASE_URL = "https://openrouter.ai/api/v1"
 
-DEFAULT_MODEL_A = "openai/gpt-oss-120b:free"
-DEFAULT_MODEL_B = "google/gemma-4-31b-it:free"
+DEFAULT_MODEL_A = "nvidia/nemotron-3-super-120b-a12b:free"
+DEFAULT_MODEL_B = "openai/gpt-oss-120b:free"
+DEFAULT_MODEL_JUDGE = "google/gemma-4-31b-it:free"
 
 ORANGE = "#FF6B35"  # Agent A / banner
 BLUE = "#4FC3F7"    # Agent B
@@ -47,31 +48,47 @@ RETRY_DEFAULT_WAIT = 5      # seconds, when the server gives no Retry-After
 RETRY_MAX_WAIT = 60         # cap any single backoff
 
 MAX_FILE_BYTES = 200 * 1024  # 200KB context-file limit
+MAX_FOLLOWUPS = 10
 
 SYSTEM_A = (
     "You are Agent A. Detect the language of the question and respond in that language throughout.\n"
     "Argue aggressively FOR your position. Be sharp, direct, attack weak points preemptively.\n"
-    "Back every claim with a concrete fact or real example — no fluff.\n"
+    "When Agent B has spoken, attack the opponent's reasoning directly: expose contradictions, false assumptions, and weak evidence.\n"
+    "No polite balance, no concessions unless the opponent is factually right.\n"
+    "Back every claim with a concrete fact or real example — no fluff. Do not invent facts.\n"
     "No corporate tone, no AI-slop phrases like 'certainly', 'it's worth noting', 'in conclusion'.\n"
     "Max 200 words."
 )
 SYSTEM_B = (
     "You are Agent B. Detect the language of the question and respond in that language throughout.\n"
     "Demolish Agent A's argument. Be aggressive, find real flaws, hit hard with counter-facts.\n"
+    "You must attack the opponent's reasoning directly: expose contradictions, false assumptions, and weak evidence.\n"
+    "No polite balance, no concessions unless the opponent is factually right.\n"
     "No soft hedging, no 'on the other hand' academic tone — go for the throat.\n"
-    "Back every attack with a concrete fact or real example.\n"
+    "Back every attack with a concrete fact or real example. Do not invent facts.\n"
     "No corporate tone, no AI-slop.\n"
     "Max 200 words."
 )
 SYSTEM_JUDGE = (
     "You are the Judge. Detect the language of the original question and respond only in that language.\n"
     "If the original question is in Russian, your entire final verdict must be in Russian.\n"
-    "Read the full debate. Deliver ONE clear verdict — no fence-sitting, no 'it depends'.\n"
-    "Be blunt and decisive. No corporate tone, no AI-slop.\n"
+    "Read the full debate as a strictly neutral evaluator. Judge only correctness: facts, logic, relevance, and burden of proof.\n"
+    "Ignore confidence, aggression, style, and rhetoric. Do not reward whoever sounds stronger.\n"
+    "Deliver ONE clear verdict — no fence-sitting, no 'it depends'.\n"
+    "Be precise and decisive. No corporate tone, no AI-slop.\n"
     "Then add a single line starting with 'BUT:' for the edge case where the losing side makes sense.\n"
     "Format:\n"
     "VERDICT: [one clear winner and why in 2-3 sentences]\n"
     "BUT: [one sentence edge case for the other side]\n"
+    "Max 200 words."
+)
+SYSTEM_FOLLOWUP_JUDGE = (
+    "You are the Judge answering follow-up questions after a completed debate.\n"
+    "Detect the language of the follow-up question and respond only in that language.\n"
+    "Use the original question, file context, debate transcript, final verdict, and previous follow-ups as context.\n"
+    "Answer the new question clearly and directly. Do not restart the whole debate.\n"
+    "Stay neutral and judge only correctness: facts, logic, relevance, and burden of proof.\n"
+    "If the follow-up asks for a practical decision, give a concrete recommendation and the condition where it changes.\n"
     "Max 200 words."
 )
 
@@ -95,6 +112,26 @@ class VersusError(Exception):
 
 
 # --- Shared helpers ----------------------------------------------------------
+
+def normalize_models(models: list[str]) -> list[str]:
+    """Return [agent A, agent B, judge], accepting the old two-model form."""
+    normalized = list(models)
+    if len(normalized) == 2:
+        normalized.append(DEFAULT_MODEL_JUDGE)
+    if len(normalized) != 3:
+        raise ValueError("models must contain 2 or 3 values")
+    return normalized
+
+
+def thinking_frame(label: str, frame: int) -> str:
+    """Return a compact waiting label with animated dots."""
+    return f"{label}{'.' * ((frame % 3) + 1)}"
+
+
+def followup_limit_reached(followups: list[dict]) -> bool:
+    """Return True when the current debate has no follow-up slots left."""
+    return len(followups) >= MAX_FOLLOWUPS
+
 
 def get_config_env_path() -> Path:
     """Return the persistent user config .env path for the current platform."""
@@ -172,6 +209,38 @@ def judge_user_content(topic: str, entries: list[dict]) -> str:
     )
 
 
+def format_followups(followups: list[dict]) -> str:
+    """Render previous follow-up Q&A pairs for the next follow-up turn."""
+    if not followups:
+        return "(уточнений пока нет)"
+    lines = []
+    for idx, item in enumerate(followups, start=1):
+        lines.append(
+            f"Уточнение {idx}:\n"
+            f"Вопрос: {item['question']}\n"
+            f"Ответ судьи: {item['answer']}"
+        )
+    return "\n\n".join(lines)
+
+
+def followup_user_content(
+    topic: str,
+    entries: list[dict],
+    verdict: str,
+    followups: list[dict],
+    question: str,
+) -> str:
+    """Build the user message for a Judge answer to a follow-up question."""
+    return (
+        f"Исходный вопрос и контекст:\n{topic}\n\n"
+        f"Полный транскрипт спора:\n{format_transcript(entries)}\n\n"
+        f"Финальный вердикт судьи:\n{verdict or '(вердикта нет)'}\n\n"
+        f"Предыдущие уточнения:\n{format_followups(followups)}\n\n"
+        f"Новый уточняющий вопрос:\n{question}\n\n"
+        "Ответь на уточняющий вопрос по этой же теме и с учетом всего контекста выше."
+    )
+
+
 def read_context_file(path_str: str) -> str | None:
     """Read a context file (<= 200KB), or None if it can't be read.
 
@@ -193,9 +262,10 @@ def build_transcript_md(
     rounds: int,
     entries: list[dict],
     verdict: str,
+    followups: list[dict] | None = None,
 ) -> str:
     """Render the whole debate as a clean Markdown document."""
-    model_a, model_b = models
+    model_a, model_b, judge_model = normalize_models(models)
     date = datetime.now().strftime("%Y-%m-%d %H:%M")
     out = [
         "# VERSUS: спор",
@@ -203,6 +273,7 @@ def build_transcript_md(
         f"- **Вопрос:** {question}",
         f"- **Агент A:** {model_a}",
         f"- **Агент B:** {model_b}",
+        f"- **Судья:** {judge_model}",
         f"- **Файл:** {file or 'нет'}",
         f"- **Раундов:** {rounds}",
         f"- **Дата:** {date}",
@@ -234,6 +305,22 @@ def build_transcript_md(
         verdict or "_(вердикта нет)_",
         "",
     ]
+    if followups:
+        out += [
+            "---",
+            "",
+            "## Уточняющие вопросы",
+            "",
+        ]
+        for idx, item in enumerate(followups, start=1):
+            out += [
+                f"### Уточнение {idx}",
+                "",
+                f"**Вопрос:** {item['question']}",
+                "",
+                item["answer"],
+                "",
+            ]
     return "\n".join(out)
 
 
@@ -461,7 +548,7 @@ def run_cli(args: argparse.Namespace) -> None:
 
     try:
         cli_run_debate(console, client, args.models, topic, args.rounds, entries)
-        verdict = cli_run_judge(console, client, args.models[0], topic, entries)
+        verdict = cli_run_judge(console, client, args.models[2], topic, entries)
     except OpenAIError as exc:
         status_code = getattr(exc, "status_code", None)
         prefix = f"[{status_code}] " if status_code else ""
@@ -527,6 +614,13 @@ if _TEXTUAL_OK:
         padding: 0 1;
         border: round #FFB347;
         border-title-color: #FFB347;
+    }
+    #followup-bar {
+        height: 3;
+        padding: 0 1;
+    }
+    #followup {
+        width: 1fr;
     }
 
     .round-header { color: $text-muted; text-style: bold; margin-top: 1; }
@@ -601,6 +695,9 @@ if _TEXTUAL_OK:
             self.rounds = rounds
             self.entries: list[dict] = []
             self.verdict: str = ""
+            self.topic: str = ""
+            self.followups: list[dict] = []
+            self.followup_running = False
 
         def compose(self) -> ComposeResult:
             yield Header()
@@ -608,6 +705,9 @@ if _TEXTUAL_OK:
                 yield VerticalScroll(id="agent-a")
                 yield VerticalScroll(id="agent-b")
             yield VerticalScroll(id="judge")
+            with Horizontal(id="followup-bar"):
+                yield Input(placeholder=f"После вердикта можно задать до {MAX_FOLLOWUPS} уточнений по этой же теме", id="followup")
+                yield Button("Спросить судью", variant="primary", id="followup-submit")
             yield Footer()
 
         def on_mount(self) -> None:
@@ -626,7 +726,7 @@ if _TEXTUAL_OK:
                 return
             md = build_transcript_md(
                 self.question, self.app.models, self.file_path, self.rounds,
-                self.entries, self.verdict,
+                self.entries, self.verdict, self.followups,
             )
             out = Path("debate.md")
             try:
@@ -634,6 +734,31 @@ if _TEXTUAL_OK:
                 self.notify(f"Сохранено: {out}")
             except OSError as exc:
                 self.notify(f"Не удалось сохранить: {exc}", severity="error")
+
+        def on_button_pressed(self, event: "Button.Pressed") -> None:
+            if event.button.id == "followup-submit":
+                self._submit_followup()
+
+        def on_input_submitted(self, event: "Input.Submitted") -> None:
+            if event.input.id == "followup":
+                self._submit_followup()
+
+        def _submit_followup(self) -> None:
+            followup_input = self.query_one("#followup", Input)
+            question = followup_input.value.strip()
+            if not question:
+                return
+            if not self.verdict:
+                self.notify("Сначала дождись финального вердикта судьи.", severity="warning")
+                return
+            if self.followup_running:
+                self.notify("Судья уже отвечает на уточнение.", severity="warning")
+                return
+            if followup_limit_reached(self.followups):
+                self.notify(f"Лимит уточнений достигнут: максимум {MAX_FOLLOWUPS} за один спор.", severity="warning")
+                return
+            followup_input.value = ""
+            self.answer_followup(question)
 
         async def _stream_turn(
             self,
@@ -643,11 +768,12 @@ if _TEXTUAL_OK:
             system_prompt: str,
             user_content: str,
             rnd: int | None,
+            waiting_label: str | None = None,
         ) -> str:
             """Stream one model response token-by-token, retrying on 429."""
             if rnd is not None:
                 await panel.mount(Static(f"── Раунд {rnd} ──", classes="round-header"))
-            body = Static("", classes="arg-body")
+            body = Static(thinking_frame(waiting_label, 0) if waiting_label else "", classes="arg-body")
             await panel.mount(body)
             panel.scroll_end(animate=False)
 
@@ -657,6 +783,27 @@ if _TEXTUAL_OK:
             ]
             for attempt in range(MAX_RETRIES + 1):
                 chunks: list[str] = []
+                waiting_task: asyncio.Task | None = None
+                if waiting_label:
+                    async def animate_waiting() -> None:
+                        frame = 1
+                        while True:
+                            await asyncio.sleep(0.35)
+                            body.update(thinking_frame(waiting_label, frame))
+                            panel.scroll_end(animate=False)
+                            frame += 1
+
+                    waiting_task = asyncio.create_task(animate_waiting())
+
+                async def stop_waiting() -> None:
+                    if waiting_task is None:
+                        return
+                    waiting_task.cancel()
+                    try:
+                        await waiting_task
+                    except asyncio.CancelledError:
+                        pass
+
                 try:
                     stream = await client.chat.completions.create(
                         model=model, messages=messages, extra_headers=EXTRA_HEADERS,
@@ -667,6 +814,7 @@ if _TEXTUAL_OK:
                             continue
                         delta = chunk.choices[0].delta.content
                         if delta:
+                            await stop_waiting()
                             chunks.append(delta)
                             body.update("".join(chunks))
                             panel.scroll_end(animate=False)
@@ -675,6 +823,7 @@ if _TEXTUAL_OK:
                         raise VersusError("Модель вернула пустой ответ.")
                     return text
                 except RateLimitError as exc:
+                    await stop_waiting()
                     if attempt >= MAX_RETRIES:
                         raise
                     wait = int(round(_retry_wait(exc, attempt)))
@@ -682,17 +831,53 @@ if _TEXTUAL_OK:
                         body.update(Text(f"⏳ Лимит запросов. Повтор через {remaining} с...", style="yellow"))
                         await asyncio.sleep(1)
                     body.update("")
+                finally:
+                    await stop_waiting()
             raise VersusError("Модель вернула пустой ответ.")  # unreachable
 
         async def _fail(self, panel: VerticalScroll, message: str) -> None:
             self.notify(message, severity="error", timeout=10)
             await panel.mount(Static(Text(message, style="bold red"), classes="error"))
 
+        @work(exclusive=False)
+        async def answer_followup(self, question: str) -> None:
+            from openai import AsyncOpenAI
+
+            self.followup_running = True
+            client = AsyncOpenAI(base_url=BASE_URL, api_key=self.app.api_key)
+            judge_panel = self.query_one("#judge", VerticalScroll)
+            judge_model = self.app.models[2]
+            idx = len(self.followups) + 1
+
+            try:
+                await judge_panel.mount(Static(f"── Уточнение {idx} ──", classes="round-header"))
+                await judge_panel.mount(Static(Text(f"Вопрос: {question}", style="bold"), classes="arg-body"))
+                judge_panel.scroll_end(animate=False)
+                answer = await self._stream_turn(
+                    client,
+                    judge_panel,
+                    judge_model,
+                    SYSTEM_FOLLOWUP_JUDGE,
+                    followup_user_content(self.topic, self.entries, self.verdict, self.followups, question),
+                    None,
+                    waiting_label="Судья думает",
+                )
+                self.followups.append({"question": question, "answer": answer})
+            except VersusError as exc:
+                await self._fail(judge_panel, str(exc))
+            except OpenAIError as exc:
+                await self._fail(judge_panel, f"Ошибка API: {exc}")
+            except Exception as exc:  # noqa: BLE001 - surface any failure in-app
+                await self._fail(judge_panel, f"Неожиданная ошибка: {exc}")
+            finally:
+                self.followup_running = False
+                await client.close()
+
         @work(exclusive=True)
         async def run_debate(self) -> None:
             from openai import AsyncOpenAI
 
-            model_a, model_b = self.app.models
+            model_a, model_b, judge_model = self.app.models
             client = AsyncOpenAI(base_url=BASE_URL, api_key=self.app.api_key)
 
             a_panel = self.query_one("#agent-a", VerticalScroll)
@@ -702,6 +887,7 @@ if _TEXTUAL_OK:
             try:
                 content = read_context_file(self.file_path) if self.file_path else None
                 topic = build_initial_context(self.question, self.file_path, content)
+                self.topic = topic
                 for rnd in range(1, self.rounds + 1):
                     a_text = await self._stream_turn(
                         client, a_panel, model_a, SYSTEM_A,
@@ -711,12 +897,14 @@ if _TEXTUAL_OK:
                     b_text = await self._stream_turn(
                         client, b_panel, model_b, SYSTEM_B,
                         agent_user_content(topic, self.entries), rnd,
+                        waiting_label="Агент B думает",
                     )
                     self.entries.append({"speaker": "Agent B", "round": rnd, "text": b_text})
                 self.verdict = await self._stream_turn(
-                    client, judge_panel, model_a, SYSTEM_JUDGE,
+                    client, judge_panel, judge_model, SYSTEM_JUDGE,
                     judge_user_content(topic, self.entries), None,
                 )
+                self.notify("Вердикт готов. Теперь можно задавать уточняющие вопросы по этой теме.", timeout=5)
             except VersusError as exc:
                 await self._fail(judge_panel, str(exc))
             except OpenAIError as exc:
@@ -826,10 +1014,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=2, help="число раундов (по умолчанию: 2)")
     parser.add_argument(
         "--models",
-        nargs=2,
-        metavar=("MODEL_A", "MODEL_B"),
-        default=[DEFAULT_MODEL_A, DEFAULT_MODEL_B],
-        help="две модели OpenRouter через пробел: сначала агент A, потом агент B",
+        nargs="+",
+        metavar="MODEL",
+        default=[DEFAULT_MODEL_A, DEFAULT_MODEL_B, DEFAULT_MODEL_JUDGE],
+        help="модели OpenRouter через пробел: агент A, агент B, опционально судья",
     )
     parser.add_argument(
         "--output",
@@ -843,7 +1031,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         version=f"versus-llm {VERSION}",
         help="показать версию и выйти",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        args.models = normalize_models(args.models)
+    except ValueError:
+        parser.error("--models нужно указать 2 или 3 значения")
+    return args
 
 
 def _force_utf8_output() -> None:
